@@ -16,8 +16,8 @@ for i in range (0,2025):
     BTC.loc[i, 'date'] = datetime.utcfromtimestamp(BTC.loc[i, 'date'] / 1000).strftime('%Y-%m-%d')
 print(BTC.tail())
 
-BTC.to_excel('BTC_USDT_01122017-17062023.xlsx', index=False)
-BTC.to_csv('BTC_USDT_01122017-17062023.csv', index=False)
+BTC.to_excel('data/BTC_USDT_01122017-17062023.xlsx', index=False)
+BTC.to_csv('data/BTC_USDT_01122017-17062023.csv', index=False)
 
 
 ETH_data = client.get_historical_klines("ETHUSDT", Client.KLINE_INTERVAL_1DAY, "1 Dec, 2017", "17 Jun, 2023")
@@ -29,5 +29,5 @@ for i in range (0,2025):
     ETH.loc[i, 'date'] = datetime.utcfromtimestamp(ETH.loc[i, 'date'] / 1000).strftime('%Y-%m-%d')
 print(ETH.tail())
 
-ETH.to_excel('ETH_USDT_01122017-17062023.xlsx', index=False)
-ETH.to_csv('ETH_USDT_01122017-17062023.csv', index=False)
+ETH.to_excel('data/ETH_USDT_01122017-17062023.xlsx', index=False)
+ETH.to_csv('data/TH_USDT_01122017-17062023.csv', index=False)
