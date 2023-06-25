@@ -9,9 +9,9 @@ apikey = f.read()
 f = open('keys/secret.txt', 'r')
 secret = f.read()
 client = Client(apikey, secret)
-name = 'XRP'
+name = 'ETH'
 pair = name + 'USDT'
-data = client.get_historical_klines(f'{pair}', Client.KLINE_INTERVAL_1DAY, "1 May, 2017", "19 Jun, 2023")
+data = client.get_historical_klines(f'{pair}', Client.KLINE_INTERVAL_1DAY, "1 May, 2017", "23 Jun, 2023")
 df = pd.DataFrame(data)
 
 df.columns = ['date', 'open', 'high', 'low', 'close', '5', '6', '7', '8', '9', '10', '11']

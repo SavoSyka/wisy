@@ -56,7 +56,7 @@ eth_to_usd_rebalanced = []
 date_rebalanced = []
 close_rebalanced = []
 SumValue_rebalanced = []
-rebalance_period = 30
+rebalance_period = 90
 rebalance_counter = 0
 
 for i in range(begin, end):
@@ -110,7 +110,7 @@ fig, ax = plt.subplots(figsize=(10, 6))
 x_ticks_indices = range(0, len(date), 4)
 x_ticks_labels = [date[i] for i in x_ticks_indices]
 
-ax.set_title('Portfolio Performance Comparison')
+ax.set_title('Portfolio balance')
 ax.set_xlabel('Date')
 ax.set_ylabel('USD')
 ax.grid(True)
