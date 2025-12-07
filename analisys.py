@@ -1,213 +1,288 @@
+import os
+from pathlib import Path
+from typing import Dict
+
 import pandas as pd
-from datetime import datetime
-import openpyxl
-import numpy as np
+from binance import Client
+from dotenv import load_dotenv
 from matplotlib import pyplot as plt
 
-BTC = pd.read_csv('data/csv/BTC.csv')
-BTC_1 = pd.read_csv('data/csv/BTC_1.csv')
-BTC_2 = pd.read_csv('data/csv/BTC_2.csv')
-ETH = pd.read_csv('data/csv/ETH.csv')
-XRP = pd.read_csv('data/csv/XRP.csv')
+DATA_DIR = Path('data/csv')
+DEFAULT_ALLOCATION = {'BTC': 50, 'ETH': 30, 'XRP': 20}
+WEEKLY_INVESTMENT = 100
+load_dotenv()
+API_KEY = os.getenv('BINANCE_API_KEY')
+API_SECRET = os.getenv('BINANCE_API_SECRET')
+QUOTE_ASSET = os.getenv('QUOTE_ASSET', 'USDT')
 
-LTC_1 = pd.read_csv('data/csv/LTC_1.csv')
-DOGE_1 = pd.read_csv('data/csv/DOGE_1.csv')
-BCH_1 = pd.read_csv('data/csv/BCH_1.csv')
-KAS = pd.read_csv('data/csv/KAS_ref.csv')
-XMR_1 = pd.read_csv('data/csv/XMR_1.csv')
+_client: Client | None = None
 
-LTC_2 = pd.read_csv('data/csv/LTC_2.csv')
-DOGE_2 = pd.read_csv('data/csv/DOGE_2.csv')
-BCH_2 = pd.read_csv('data/csv/BCH_2.csv')
-KAS = pd.read_csv('data/csv/KAS_ref.csv')
-XMR_2 = pd.read_csv('data/csv/XMR_2.csv')
 
-MATIC = pd.read_csv('data/csv/MATIC.csv')
-ADA = pd.read_csv('data/csv/ADA.csv')
-SOL = pd.read_csv('data/csv/SOL.csv')
-#TON = pd.read_csv('data/csv/TON.csv')
+def get_client() -> Client:
+    global _client
+    if _client is None:
+        if not API_KEY or not API_SECRET:
+            raise RuntimeError('Отсутствуют Binance API ключи. Задайте BINANCE_API_KEY и BINANCE_API_SECRET в .env')
+        _client = Client(API_KEY, API_SECRET)
+    return _client
 
-LINK = pd.read_csv('data/csv/LINK.csv')
-LDO = pd.read_csv('data/csv/LDO.csv')
-MKR = pd.read_csv('data/csv/MKR.csv')
-UNI = pd.read_csv('data/csv/UNI.csv')
-AAVE = pd.read_csv('data/csv/AAVE.csv')
-COMP = pd.read_csv('data/csv/COMP.csv')
 
-ARB = pd.read_csv('data/csv/ARB.csv')
-OP = pd.read_csv('data/csv/OP.csv')
+def load_price_history(token: str) -> pd.DataFrame | None:
+    path = DATA_DIR / f'{token}.csv'
+    if not path.exists():
+        return None
+    df = pd.read_csv(path)
+    df['date_dt'] = pd.to_datetime(df['date'], dayfirst=True)
+    return df
 
-# График без ребалансировки портфеля
-usd = 0
-usd_list = []
 
-btc = 0
-btc_list = []
-btc_to_usd = []
+def parse_allocation(raw: str) -> dict[str, float]:
+    allocation: dict[str, float] = {}
+    for part in raw.split(','):
+        if ':' not in part:
+            raise ValueError('Используйте формат TOKEN:процент')
+        token, share = part.split(':', 1)
+        token = token.strip().upper()
+        if not token:
+            raise ValueError('Не заполнено имя токена')
+        try:
+            percent = float(share.replace('%', '').strip())
+        except ValueError:
+            raise ValueError(f'Не удалось прочитать процент для {token}')
+        if percent <= 0:
+            raise ValueError('Доли должны быть больше 0')
+        allocation[token] = percent
+    total = sum(allocation.values())
+    if abs(total - 100) > 1e-6:
+        raise ValueError(f'Сумма долей должна быть 100%, сейчас {total}')
+    return allocation
 
-ltc = 0
-ltc_list = []
-ltc_to_usd = []
 
-doge = 0
-doge_list = []
-doge_to_usd = []
+def download_history(token: str, start_date: pd.Timestamp, end_date: pd.Timestamp) -> pd.DataFrame:
+    client = get_client()
+    os.makedirs(DATA_DIR, exist_ok=True)
+    pair = f'{token}{QUOTE_ASSET}'
+    start = start_date.strftime('%d %b, %Y')
+    end = end_date.strftime('%d %b, %Y')
+    print(f'Загружаю {pair} с {start} по {end}...')
+    data = client.get_historical_klines(pair, Client.KLINE_INTERVAL_1DAY, start, end)
+    if not data:
+        raise RuntimeError(f'Binance не вернул данных для {pair}')
+    df = pd.DataFrame(data, columns=['date', 'open', 'high', 'low', 'close', '5', '6', '7', '8', '9', '10', '11'])
+    df = df[['date', 'close']]
+    df['close'] = df['close'].astype(float)
+    df['date'] = pd.to_datetime(df['date'], unit='ms').dt.strftime('%d-%m-%Y')
+    df['date_dt'] = pd.to_datetime(df['date'], dayfirst=True)
+    output_path = DATA_DIR / f'{token}.csv'
+    df.to_csv(output_path, index=False)
+    print(f' - сохранено в {output_path}')
+    return df
 
-kas = 0
-kas_list = []
-kas_to_usd = []
 
-bch = 0
-bch_list = []
-bch_to_usd = []
+def ensure_data(
+    token: str,
+    df: pd.DataFrame | None,
+    start_date: pd.Timestamp,
+    end_date: pd.Timestamp,
+) -> pd.DataFrame:
+    if df is None:
+        df = download_history(token, start_date, end_date)
+    start_available = df['date_dt'].iloc[0]
+    end_available = df['date_dt'].iloc[-1]
+    if start_date < start_available or end_date > end_available:
+        df = download_history(token, start_date, end_date)
+    return df
 
-xmr = 0
-xmr_list = []
-xmr_to_usd = []
 
-eth = 0
-eth_list = []
-eth_to_usd = []
+def default_dates(df: pd.DataFrame | None) -> tuple[pd.Timestamp, pd.Timestamp]:
+    if df is not None:
+        return df['date_dt'].iloc[0], df['date_dt'].iloc[-1]
+    today = pd.Timestamp.today().normalize()
+    return today - pd.Timedelta(days=365), today
 
-xrp = 0
-xrp_list = []
-xrp_to_usd = []
 
-date = []
-close = []
-SumValue = []
-begin = 0
-end = BTC.shape[0]
-day = begin % 7
-btc_kotleta = 27800/float(BTC.loc[0, 'close'])
-btc_kotleta_usd = []
-for i in range(begin, end):
-    if i % 7 == day:
-        usd += 100
+# ... rest of file unchanged until prompt allocation definitions ...
+    allocation: dict[str, float] = {}
+    for part in raw.split(','):
+        if ':' not in part:
+            raise ValueError('Используйте формат TOKEN:процент')
+        token, share = part.split(':', 1)
+        token = token.strip().upper()
+        if not token:
+            raise ValueError('Не заполнено имя токена')
+        try:
+            percent = float(share.replace('%', '').strip())
+        except ValueError:
+            raise ValueError(f'Не удалось прочитать процент для {token}')
+        if percent <= 0:
+            raise ValueError('Доли должны быть больше 0')
+        allocation[token] = percent
+    total = sum(allocation.values())
+    if abs(total - 100) > 1e-6:
+        raise ValueError(f'Сумма долей должна быть 100%, сейчас {total}')
+    return allocation
+
+
+def prompt_allocation() -> tuple[dict[str, float], Dict[str, pd.DataFrame | None]]:
+    default_str = ', '.join(f'{token}:{share}' for token, share in DEFAULT_ALLOCATION.items())
+    while True:
+        raw = input(f'Укажите токены и доли (формат BTC:50,ETH:30,...) [{default_str}]: ').strip()
+        try:
+            allocation = parse_allocation(raw) if raw else DEFAULT_ALLOCATION
+            dataframes = {token: load_price_history(token) for token in allocation}
+            return {token: share / 100 for token, share in allocation.items()}, dataframes
+        except ValueError as exc:
+            print(f'Ошибка: {exc}')
+            print('Попробуйте ещё раз.')
+
+
+def prompt_date(message: str, default_value: pd.Timestamp) -> pd.Timestamp:
+    default_str = default_value.strftime('%d-%m-%Y')
+    while True:
+        user_input = input(f'{message} [{default_str}]: ').strip()
+        if not user_input:
+            return default_value
+        try:
+            return pd.to_datetime(user_input, dayfirst=True)
+        except ValueError:
+            print('Не удалось распознать дату. Используйте формат ДД-ММ-ГГГГ, например 01-12-2025.')
+
+
+def prompt_date_range(default_start: pd.Timestamp, default_end: pd.Timestamp) -> tuple[pd.Timestamp, pd.Timestamp]:
+    while True:
+        start = prompt_date('Введите начальную дату', default_start)
+        end = prompt_date('Введите конечную дату', default_end)
+        if start > end:
+            print('Начальная дата должна быть раньше конечной.')
+            continue
+        return start, end
+
+
+def build_chart(dates, lump_values, portfolio_values, usd_list, allocation_label, lump_label):
+    fig, ax = plt.subplots(figsize=(10, 6))
+    x_ticks_indices = range(0, len(dates), max(1, len(dates) // 10))
+    x_ticks_labels = [dates[i] for i in x_ticks_indices]
+
+    ax.set_title('DCA анализ')
+    ax.set_xlabel('Дата')
+    ax.set_ylabel('USD')
+    ax.grid(True)
+
+    ax.plot(dates, lump_values, label=lump_label)
+    ax.plot(dates, portfolio_values, label=allocation_label)
+    ax.plot(dates, usd_list, label='Инвестировано USD')
+
+    plt.xticks(x_ticks_indices, x_ticks_labels, rotation=90)
+    plt.legend()
+    plt.tight_layout()
+    plt.savefig('top_3')
+    plt.show()
+
+
+def main():
+    allocation, dfs = prompt_allocation()
+    reference_token = next(iter(allocation))
+    default_start, default_end = default_dates(dfs[reference_token])
+    start_date, end_date = prompt_date_range(default_start, default_end)
+
+    dfs = {
+        token: ensure_data(token, dfs.get(token), start_date, end_date)
+        for token in allocation
+    }
+
+    usd = 0
+    usd_list = []
+    portfolio_values = []
+    investment_dates = []
+
+    token_state = {token: {'amount': 0.0, 'values': []} for token in allocation}
+    lump_token = reference_token
+    lump_prices: list[float] = []
+
+    reference_dates = dfs[reference_token]['date_dt']
+    price_lookup = {
+        token: df.set_index('date_dt')['close']
+        for token, df in dfs.items()
+    }
+    mask = (reference_dates >= start_date) & (reference_dates <= end_date)
+    indices = reference_dates[mask].index.tolist()
+    if not indices:
+        print('Нет данных в выбранном диапазоне.')
+        return
+
+    day_offset = indices[0] % 7
+
+    for i in indices:
+        if i % 7 != day_offset:
+            continue
+
+        usd += WEEKLY_INVESTMENT
         usd_list.append(usd)
 
-        btc += 60 / float(BTC.loc[i, 'close'])
-        btc_to_usd.append(btc * float(BTC.loc[i, 'close']))
+        period_sum = 0.0
+        current_date = dfs[reference_token].loc[i, 'date_dt']
 
-        eth += 30 / float(ETH.loc[i, 'close'])
-        eth_to_usd.append(eth * float(ETH.loc[i, 'close']))
+        for token, share in allocation.items():
+            series = price_lookup[token]
+            available_dates = series.index[series.index <= current_date]
+            if available_dates.empty:
+                last_value = token_state[token]['values'][-1] if token_state[token]['values'] else 0
+                token_state[token]['values'].append(last_value)
+                continue
 
-        xrp += 20 / float(XRP.loc[i, 'close'])
-        xrp_to_usd.append(xrp * float(XRP.loc[i, 'close']))
+            price = float(series.loc[available_dates[-1]])
 
-        btc_kotleta_usd.append(btc_kotleta*float(BTC.loc[i, 'close']))
+            amount = (WEEKLY_INVESTMENT * share) / price
+            token_state[token]['amount'] += amount
+            usd_value = token_state[token]['amount'] * price
+            token_state[token]['values'].append(usd_value)
+            period_sum += usd_value
 
-        SumValue.append(eth * float(ETH.loc[i, 'close']) + btc * float(BTC.loc[i, 'close'])+ xrp * float(XRP.loc[i, 'close']))
+        portfolio_values.append(period_sum)
+        date_label = dfs[reference_token].loc[i, 'date']
+        investment_dates.append(date_label)
 
-        date.append(BTC.loc[i, 'date'])
-        #close.append(BTC.loc[i, 'close'] * (28800 / BTC.loc[begin, 'close']))
+        ref_series = price_lookup[lump_token]
+        ref_available = ref_series.index[ref_series.index <= current_date]
+        if ref_available.empty:
+            lump_price = float(ref_series.iloc[0])
+        else:
+            lump_price = float(ref_series.loc[ref_available[-1]])
+        lump_prices.append(lump_price)
 
-# # График с ребалансировкой портфеля
-# usd_rebalanced = 0
-# usd_list_rebalanced = []
-# btc_rebalanced = 0
-# btc_list_rebalanced = []
-# btc_to_usd_rebalanced = []
-#
-# eth_rebalanced = 0
-# eth_list_rebalanced = []
-# eth_to_usd_rebalanced = []
-# date_rebalanced = []
-# close_rebalanced = []
-# SumValue_rebalanced = []
-# rebalance_period = 90
-# rebalance_counter = 0
-#
-# for i in range(begin, end):
-#     if i % 7 == day:
-#         usd_rebalanced += 100
-#         usd_list_rebalanced.append(usd_rebalanced)
-#
-#         btc_rebalanced += 50 / float(BTC.loc[i, 'close'])
-#         btc_list_rebalanced.append(btc_rebalanced)
-#
-#         btc_to_usd_rebalanced.append(btc_rebalanced * float(BTC.loc[i, 'close']))
-#
-#         eth_rebalanced += 50 / float(ETH.loc[i, 'close'])
-#         eth_list_rebalanced.append(eth_rebalanced)
-#
-#         eth_to_usd_rebalanced.append(eth_rebalanced * float(ETH.loc[i, 'close']))
-#
-#         SumValue_rebalanced.append(eth_rebalanced * float(ETH.loc[i, 'close']) + btc_rebalanced * float(BTC.loc[i, 'close']))
-#
-#         date_rebalanced.append(BTC.loc[i, 'date'])
-#         close_rebalanced.append(BTC.loc[i, 'close'] * (28800 / BTC.loc[begin, 'close']))
-#
-#     if rebalance_counter == rebalance_period:
-#         total_value = btc_rebalanced * float(BTC.loc[i, 'close']) + eth_rebalanced * float(ETH.loc[i, 'close'])
-#         target_btc = total_value / (2 * float(BTC.loc[i, 'close']))
-#         target_eth = total_value / (2 * float(ETH.loc[i, 'close']))
-#         btc_rebalanced = target_btc
-#         eth_rebalanced = target_eth
-#         # btc_list_rebalanced.append(btc_rebalanced)
-#         # eth_list_rebalanced.append(eth_rebalanced)
-#         # usd_list_rebalanced.append(usd_list_rebalanced[-1])
-#         # btc_to_usd_rebalanced.append(btc_rebalanced * float(BTC.loc[i, 'close']))
-#         # eth_to_usd_rebalanced.append(eth_rebalanced * float(ETH.loc[i, 'close']))
-#         # date_rebalanced.append(BTC.loc[i, 'date'])
-#         # SumValue_rebalanced.append(eth_rebalanced * float(ETH.loc[i, 'close']) + btc_rebalanced * float(BTC.loc[i, 'close']))
-#         rebalance_counter = 0
-#
-#     rebalance_counter += 1
-#
-for i in range(0, len(btc_to_usd)):
-    btc_to_usd[i] = btc_to_usd[i] * 2
-    eth_to_usd[i] = eth_to_usd[i] * 2
-#
-# for i in range(0, len(btc_to_usd_rebalanced)):
-#     btc_to_usd_rebalanced[i] = btc_to_usd_rebalanced[i] * 2
-#     eth_to_usd_rebalanced[i] = eth_to_usd_rebalanced[i] * 2
+    if not investment_dates or not usd_list:
+        print('В выбранном диапазоне нет ни одной недели для инвестиций.')
+        return
 
-# Построение графиков на одной фигуре
-fig, ax = plt.subplots(figsize=(10, 6))
+    for token, state in token_state.items():
+        if len(state['values']) < len(portfolio_values):
+            # если токен появился позже, дублируем последнюю стоимость для графика
+            last_value = state['values'][-1] if state['values'] else 0
+            missing = len(portfolio_values) - len(state['values'])
+            state['values'].extend([last_value] * missing)
 
-x_ticks_indices = range(0, len(date), 4)
-x_ticks_labels = [date[i] for i in x_ticks_indices]
+    total_invested = usd_list[-1]
+    lump_amount = total_invested / lump_prices[0] if lump_prices and lump_prices[0] else 0
+    lump_values = [lump_amount * price for price in lump_prices]
 
-ax.set_title('ТОП 3')
-ax.set_xlabel('Date')
-ax.set_ylabel('USD')
-ax.grid(True)
+    allocation_label = ', '.join(f'{token} {share * 100:.0f}%' for token, share in allocation.items())
+    lump_label = f'Разовая покупка {lump_token}'
 
-#ax.plot(date, btc_to_usd, label='BTC')
-ax.plot(date, btc_kotleta_usd, label = 'one-time purchase BTC')
-# ax.plot(date, eth_to_usd, label='ETH (No Rebalancing)')
-ax.plot(date, SumValue, label='50% — BTC / 30% — ETH/ 20% — XRP')
+    build_chart(investment_dates, lump_values, portfolio_values, usd_list, allocation_label, lump_label)
+
+    peak_value = max(portfolio_values)
+    peak_index = portfolio_values.index(peak_value)
+    peak_date = investment_dates[peak_index]
+
+    print(f'Диапазон анализа: {start_date.date()} — {end_date.date()}')
+    print(f'Инвестировано всего: {usd_list[-1]} USD')
+    print(f'Максимальная стоимость портфеля: {peak_value:.2f} USD на {peak_date}')
+    print(f'Стоимость портфеля в конце: {portfolio_values[-1]:.2f} USD')
+    print(f'Линия buy&hold ({lump_token}): максимум {max(lump_values):.2f}, финал {lump_values[-1]:.2f}')
+
+    for token, state in token_state.items():
+        print(f'{token}: максимум {max(state["values"]):.2f} USD, финал {state["values"][-1]:.2f} USD')
 
 
-# ax.plot(date_rebalanced, btc_to_usd_rebalanced, label='BTC (With Rebalancing)')
-# ax.plot(date_rebalanced, eth_to_usd_rebalanced, label='ETH (With Rebalancing)')
-#ax.plot(date_rebalanced, SumValue_rebalanced, label='BTC+ETH (With Rebalancing)', color='#00b894')
-# ax.plot(date_rebalanced, usd_list_rebalanced, label='USD (With Rebalancing)')
-
-
-ax.plot(date, usd_list, label='USD', )
-
-plt.xticks(x_ticks_indices, x_ticks_labels, rotation=90)
-
-plt.legend()
-
-plt.tight_layout()
-
-print('максимум деняк: ',max(SumValue), 'деняк в конце стратегии: ',SumValue[-1])
-print('BTC ',max(btc_to_usd), btc_to_usd[-1])
-print('ETH ',max(eth_to_usd), eth_to_usd[-1])
-print('XRP ',max(xrp_to_usd), xrp_to_usd[-1])
-print('дата пика: ',SumValue.index(max(SumValue)), date[SumValue.index(max(SumValue))])
-print('вложено бачей: ',usd_list[-1])
-print('вложено на пике: ', usd_list[SumValue.index(max(SumValue))])
-print('\n')
-# print(max(SumValue_rebalanced), SumValue_rebalanced[-1])
-# print(max(btc_to_usd_rebalanced), btc_to_usd_rebalanced[-1])
-# print(max(eth_to_usd_rebalanced), eth_to_usd_rebalanced[-1])
-# print(SumValue_rebalanced.index(max(SumValue_rebalanced)), date[SumValue_rebalanced.index(max(SumValue_rebalanced))])
-# print(usd_list_rebalanced[SumValue_rebalanced.index(max(SumValue_rebalanced))])
-plt.savefig('top_3')
-plt.show()
-
-
+if __name__ == '__main__':
+    main()
